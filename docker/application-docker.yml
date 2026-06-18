@@ -1,0 +1,16 @@
+# Docker 环境配置覆写
+spring:
+  datasource:
+    druid:
+      master:
+        url: jdbc:mysql://mysql:3306/tony-flowable-24?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8&nullCatalogMeansCurrent=true&allowPublicKeyRetrieval=true
+        username: root
+        password: 123456
+  redis:
+    host: redis
+    port: 6379
+    password:
+
+# 文件上传路径 (Linux)
+ruoyi:
+  profile: /home/ruoyi/uploadPath
