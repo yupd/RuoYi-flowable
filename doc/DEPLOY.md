@@ -37,24 +37,13 @@ npm run build:prod
 # 构建产物在 ruoyi-ui/dist/ 目录
 ```
 
-### 1.3 将前端产物嵌入后端
+### 1.3 编译后端
 
 ```bash
-# 清空原有静态资源
-rm -rf ruoyi-admin/src/main/resources/static/*
-
-# 复制前端 dist 到 Spring Boot 静态资源目录
-mkdir -p ruoyi-admin/src/main/resources/static
-cp -r ruoyi-ui/dist/* ruoyi-admin/src/main/resources/static/
-```
-
-### 1.4 编译后端
-
-```bash
-# 在项目根目录执行（确保已嵌入前端产物）
+# 在项目根目录执行（纯后端 jar，不含前端静态文件）
 mvn clean package -DskipTests
 
-# 构建产物: ruoyi-admin/target/ruoyi-admin.jar (约 101MB)
+# 构建产物: ruoyi-admin/target/ruoyi-admin.jar (约 95MB)
 ```
 
 ---
@@ -66,9 +55,14 @@ mvn clean package -DskipTests
 ```
 docker/
 ├── Dockerfile                  # 应用镜像构建文件
-├── docker-compose.yml          # 编排文件 (MySQL + Redis + App)
+├── docker-compose.yml          # 编排文件 (MySQL + Redis + App + Nginx)
 ├── application-docker.yml      # Docker 环境配置覆写
-├── ruoyi-admin.jar             # 编译好的 jar 包
+├── nginx.conf                  # Nginx 反向代理配置
+├── ruoyi-admin.jar             # 编译好的后端 jar 包
+├── dist/                       # 前端编译产物 (Vue SPA)
+│   ├── index.html
+│   ├── static/
+│   └── ...
 └── mysql-init/                 # 数据库初始化 SQL
     ├── 01_ruoyi.sql            # 核心表
     ├── 02_quartz.sql           # 定时任务表
@@ -96,19 +90,25 @@ ENTRYPOINT ["java", "-jar", "-Duser.timezone=Asia/Shanghai", "/app/ruoyi-admin.j
 ### 2.3 docker-compose.yml 服务拓扑
 
 ```
-┌──────────────────────────────────────────┐
-│          docker-compose stack            │
-│                                          │
-│  ┌──────────┐  ┌───────┐  ┌─────────┐  │
-│  │  MySQL   │  │ Redis │  │   App   │  │
-│  │  :3306   │  │ :6379 │  │  :8080  │  │
-│  │ healthy  │  │healthy│  │         │  │
-│  └────┬─────┘  └───┬───┘  └────┬────┘  │
-│       │            │           │        │
-│       └────────────┼───────────┘        │
-│                    │ (depends_on)        │
-│              health check               │
-└──────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│              docker-compose stack                 │
+│                                                   │
+│  ┌──────────┐  ┌───────┐  ┌─────────┐            │
+│  │  MySQL   │  │ Redis │  │   App   │            │
+│  │  :3306   │  │ :6379 │  │  :8080  │            │
+│  └────┬─────┘  └───┬───┘  └────┬────┘            │
+│       │            │           │                  │
+│       └────────────┴───────────┘                  │
+│                    │                              │
+│              ┌─────┴─────┐                        │
+│              │   Nginx   │                        │
+│              │   :80     │                        │
+│              │ /         → dist (静态文件)         │
+│              │ /prod-api/ → app:8080/ (API 代理)  │
+│              └───────────┘                        │
+│                    ▲                              │
+│                    │ 用户访问 :80                  │
+└───────────────────────────────────────────────────┘
 ```
 
 关键配置覆写（`application-docker.yml`）：
@@ -159,10 +159,8 @@ IP:   192.168.11.67
 ```bash
 # ========== 在本地开发机执行 ==========
 
-# 1. 编译前端并嵌入后端
+# 1. 编译前端
 cd ruoyi-ui && npm install && npm run build:prod
-mkdir -p ../ruoyi-admin/src/main/resources/static
-cp -r dist/* ../ruoyi-admin/src/main/resources/static/
 
 # 2. 编译后端
 cd .. && mvn clean package -DskipTests
@@ -170,6 +168,7 @@ cd .. && mvn clean package -DskipTests
 # 3. 准备 Docker 部署文件
 mkdir -p docker/mysql-init
 cp ruoyi-admin/target/ruoyi-admin.jar docker/
+cp -r ruoyi-ui/dist docker/dist
 cp sql/ry_20240629.sql docker/mysql-init/01_ruoyi.sql
 cp sql/quartz.sql docker/mysql-init/02_quartz.sql
 cp sql/tony-flowable.sql docker/mysql-init/03_flowable.sql
@@ -208,9 +207,11 @@ curl http://localhost:8080/captchaImage
 ```bash
 # 仅更新应用（jar 包更新后）
 cd /opt/ruoyi-flowable
-docker-compose down app        # 仅停应用
-docker-compose build --no-cache app
-docker-compose up -d
+docker-compose up -d --build app    # 重建并启动 app
+
+# 仅更新前端（dist 更新后）
+cd /opt/ruoyi-flowable
+docker-compose restart nginx        # nginx 直接挂载 dist，重启即可
 ```
 
 ---
@@ -249,9 +250,9 @@ docker exec -it ruoyi-app /bin/bash
 
 | 地址 | 说明 |
 |------|------|
-| `http://192.168.11.67:8080/index.html` | 前端登录页面 |
-| `http://192.168.11.67:8080/captchaImage` | 验证码接口 |
-| `http://192.168.11.67:8080/druid/` | Druid 监控面板 (ruoyi/123456) |
+| `http://192.168.11.67/` | 前端登录页面 (nginx 80 端口) |
+| `http://192.168.11.67/prod-api/captchaImage` | 验证码接口 (nginx 代理) |
+| `http://192.168.11.67:8080/druid/` | Druid 监控面板 (直连后端, ruoyi/123456) |
 
 ---
 
