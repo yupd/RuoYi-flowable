@@ -1,3 +1,4 @@
+SET NAMES utf8mb4;
 -- sys_deploy_form definition
 
 CREATE TABLE `sys_deploy_form`
